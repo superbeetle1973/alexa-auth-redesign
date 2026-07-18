@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-18
 **Author:** Claude (analysis of `alandtse/alexa_media_player` + `keatontaylor/alexapy`)
-**Status:** Draft for critique
+**Status:** Reviewed (Codex adversarial + contradiction-resolution passes complete); delivery decided — fork-first, new domain
+**Repo:** https://github.com/superbeetle1973/alexa-auth-redesign (public)
 
 ## Scope
 
@@ -450,8 +451,16 @@ spec-compliant; the following bindings make it concrete.
   domain preserves users' entities/automations when switching but collides
   with the upstream repo (users cannot install both, and default-store
   coexistence is unclear); a new domain coexists cleanly but regenerates every
-  entity ID, breaking existing automations. Decide explicitly at fork time;
-  the migration section's guarantees only hold on the same-domain path.
+  entity ID, breaking existing automations. The migration section's guarantees
+  only hold on the same-domain path.
+  **DECIDED 2026-07-18: new domain.** The operator has few entities and a
+  couple of automations to re-point; clean coexistence with upstream (side by
+  side install during cutover, no HACS collision) outweighs entity-ID
+  continuity. Consequence: the in-place migration machinery in "### Migration"
+  is NOT needed for the fork — first-run enrollment is a fresh interactive
+  login, after which the upstream integration and its stored secrets are
+  removed. The migration section stays in the doc because it becomes required
+  again if this design is later upstreamed into the same-domain integration.
 
 ---
 
@@ -497,13 +506,23 @@ load-bearing still needs the validation spikes above before implementation.
   release window.
 - **Fork landscape:** no maintained alternative forks; upstream is the only
   game in town.
-- **Recommendation:** open an upstream RFC issue in alexa_media_player linking
-  this threat model; allocate ~2 weeks for maintainer response. If dismissed
-  or ignored, pivot to a maintained fork pair (both repos, new HACS name,
-  weekly upstream cherry-pick automation). A domain-colliding local HACS patch
-  is viable only as a stopgap — it cannot reach the alexapy internals this
-  design changes. This resolves the "no landing zone" gap: **RFC probe first,
-  fork as the committed fallback.**
+- **Recommendation (superseded — see decision):** open an upstream RFC issue
+  in alexa_media_player linking this threat model; allocate ~2 weeks for
+  maintainer response. If dismissed or ignored, pivot to a maintained fork
+  pair (both repos, new HACS name, weekly upstream cherry-pick automation).
+  A domain-colliding local HACS patch is viable only as a stopgap — it cannot
+  reach the alexapy internals this design changes.
+  **DECIDED 2026-07-18: fork-first, RFC in parallel.** Rationale: the RFC
+  probe gates shipping on a maintainer response to a proposal with no prior
+  community demand, while the fork delivers the security fix to the operator
+  immediately and loses nothing — the RFC can still be filed as an invitation
+  (linking this public repo), and if upstream adopts the design the fork
+  retires. Concretely: fork both repos, new integration domain (per the
+  domain decision below), forked alexapy published under a new PyPI name and
+  pinned in `manifest.json`, weekly upstream cherry-pick automation, full
+  GitHub releases per HACS requirements. The upstream RFC is a courtesy
+  follow-up, not a gate; filing it awaits operator go-ahead since it is a
+  public post under the operator's account.
 
 ### C. Device deregistration on teardown — IMPLEMENTABLE, add to design
 
