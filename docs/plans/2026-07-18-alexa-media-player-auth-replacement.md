@@ -378,6 +378,83 @@ Before implementation, these must be resolved rather than assumed:
 
 ---
 
+## HA / HACS spec alignment audit (2026-07-18)
+
+Verified against developers.home-assistant.io (config entries, config flow
+handler, setup failures, diagnostics), hacs.xyz publishing docs, and HA core
+source (`helpers/storage.py`, `util/file.py`). Verdict: the design is
+spec-compliant; the following bindings make it concrete.
+
+### Confirmed aligned, with the exact HA mechanism to use
+
+- **Refresh-failure classification** matches HA semantics exactly:
+  `ConfigEntryAuthFailed` puts the entry in a failure state and starts the
+  reauth flow; `ConfigEntryNotReady` gets automatic retry with backoff.
+  Spec constraints to honor: `ConfigEntryAuthFailed` is only effective when
+  raised from `async_setup_entry` or from within a `DataUpdateCoordinator`,
+  and the integration must not log non-debug messages about retries (HA
+  handles that).
+- **Reauth flow:** implement `async_step_reauth` → `async_step_reauth_confirm`;
+  on success the flow must update the existing entry and abort — never create
+  a new entry — via `async_update_reload_and_abort(self._get_reauth_entry(),
+  data_updates=...)`. `strings.json` needs the `reauth_confirm` step and the
+  `reauth_successful` abort key.
+- **Account binding lands on `unique_id`.** HA's
+  `async_set_unique_id(account_id)` + `_abort_if_unique_id_mismatch()` in the
+  reauth flow is the framework-native implementation of the account-binding
+  control Open question 5 requires: after the token exchange exposes the
+  Amazon account identifier, set it as the flow's unique ID and abort on
+  mismatch, so a reauth cannot silently rebind the entry to a different
+  Amazon account. Fold this into the OQ5 spike as the required mechanism.
+- **Migration:** bump the config flow `VERSION` (major) and implement
+  `async_migrate_entry` in `__init__.py`; it runs automatically during setup
+  when versions differ and must return `True` on success. The plan's
+  local-only schema migration is the correct shape — a failed migration fails
+  setup, so no network I/O belongs in `async_migrate_entry`; the live
+  validation happens afterward in normal setup, per the lazy-migration design.
+  Note the documented downgrade cost: a major version bump makes the entry
+  fail setup on downgrade without a backup restore.
+- **Teardown:** `async_remove_entry` is the sanctioned hook and is called
+  after the entry is already deleted from `hass.config_entries` — correct
+  place for the best-effort `/auth/deregister` call plus protected-store
+  deletion.
+- **Protected store (source-verified):** `helpers.storage.Store(...,
+  private=True, atomic_writes=True)` writes to `.storage/` and skips the
+  `0o644` chmod, leaving the tempfile-created `0o600` mode — exactly the
+  "dedicated 0600 store with atomic writes" the design specifies. Caveat the
+  design already makes stands: `.storage` is included in HA backups, so this
+  is hygiene, not host-compromise protection.
+- **Diagnostics:** HA requires redaction of passwords/API keys/tokens via
+  `async_redact_data` + a `TO_REDACT` list. The implementation must include
+  `refresh_token`, `mac_dms`, `access_token`, and the device `serial` in
+  `TO_REDACT`.
+- **Paste-URL step:** config flow forms support the required multiline
+  `TextSelector`; no framework obstacle.
+
+### HACS constraints (bind the fork path)
+
+- Structure: one integration per repo under `custom_components/<domain>/`;
+  `hacs.json` (with `name`) at repo root; `manifest.json` must carry `domain`,
+  `name`, `version`, `documentation`, `issue_tracker`, `codeowners`.
+- Versioning: publish full GitHub **releases**, not bare tags — HACS ignores
+  tag-only versioning.
+- Default-store inclusion (if the fork goes that route): public repo, HACS
+  Action + Hassfest actions passing, a release published after the actions
+  run, and brand assets (repo `brand/icon.png` or home-assistant/brands).
+  Submission must come from the repo owner's personal account.
+- **alexapy coupling:** HACS ships only the integration; `alexapy` arrives via
+  `manifest.json` `requirements`. A fork that changes alexapy internals must
+  publish the forked library under a new PyPI name (alexapy is pure Python, so
+  no wheel issues) and pin it — it cannot ride the upstream `alexapy==` pin.
+- **Domain choice tradeoff (fork path):** keeping upstream's `alexa_media`
+  domain preserves users' entities/automations when switching but collides
+  with the upstream repo (users cannot install both, and default-store
+  coexistence is unclear); a new domain coexists cleanly but regenerates every
+  entity ID, breaking existing automations. Decide explicitly at fork time;
+  the migration section's guarantees only hold on the same-domain path.
+
+---
+
 ## Alternatives investigation (2026-07-18, Haiku research agents)
 
 Three parallel investigations into gaps the second review pass surfaced.
