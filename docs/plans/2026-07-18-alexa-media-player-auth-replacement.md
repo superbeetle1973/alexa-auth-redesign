@@ -202,10 +202,14 @@ credential material, not *eliminated* durable credential material.
 - `exchange_token_for_cookies()` re-mints session cookies each start from the
   refresh token (existing, `alexalogin.py:1710`). Cookies are not persisted,
   which deletes the `load_cookie`/`save_cookiefile`/serialization subsystem
-  (problems 6 and 7). **This is contingent on a validation spike** proving every
-  API, push, and websocket path can reconstruct all required cookies and CSRF
-  state from the stored device credentials after a restart; otherwise dropping
-  cookie persistence turns every restart into a latent outage.
+  (problems 6 and 7). **Precedent-backed:** `Apollon77/alexa-cookie` v2+ has
+  re-minted cookies from stored registration data (no re-login, no persisted
+  cookies) in production for years across ioBroker.alexa2 and node
+  alexa-remote; openHAB's amazonechocontrol does the same via
+  `/ap/exchangetoken` (`source_token_type=refresh_token` → `auth_cookies`) —
+  the identical endpoint family alexapy already calls. Verified implicitly by
+  the fork's own first restart during development rather than a pre-work
+  spike.
 - **Refresh failures must be classified, not blindly treated as reauth.** HA
   expects `async_step_reauth` only on genuine *authentication* failure
   (revoked/expired token, password change). Transient network/server errors and
@@ -326,7 +330,7 @@ terminal authentication failure requires interactive reauthentication.
 | TOTP seed stored (collapses factor independence for this HA data) | Remove seed collection, storage, and local OTP generation entirely; users complete MFA interactively with their own authenticator |
 | Password stored at rest | Discard after enrollment; never persist (transits the proxy but is not written) |
 | Secrets in logs | Remove TOTP logging; `refresh_token`/`mac_dms` redacted, never logged |
-| Fragile HTML scraping | Delete it; drive login through Amazon's real page (pending validation spike) |
+| Fragile HTML scraping | Delete it; drive login through Amazon's real page via the paste-URL flow (Audible-precedented) |
 | Pickle RCE on cookie load | Delete cookie persistence entirely |
 | aiohttp-internals coupling | Delete cookie serialization; re-mint cookies from the refresh token |
 | Plaintext durable tokens | Store only `refresh_token` + `mac_dms`, minimized, isolated, protected at rest |
@@ -339,9 +343,64 @@ durable derived credentials it must retain.** It does not eliminate replayable
 credentials entirely — `refresh_token` and `mac_dms` remain — and it does not make
 the underlying flow supported.
 
-## Open questions / required validation spikes
+## Open questions — resolved by ecosystem precedent (2026-07-18)
 
-Before implementation, these must be resolved rather than assumed:
+Originally framed as pre-implementation validation spikes. Decision
+(2026-07-18): **do not time-gate implementation on spikes.** Each question is
+answered by projects running the same device-registration flow in production;
+the assumptions below are adopted as design defaults and verified as ordinary
+checkpoints during development, not before it.
+
+**Precedent base:**
+- `mkb79/Audible` — paste-URL external login (`external_login()` parses
+  `openid.oa2.authorization_code` from the pasted `/ap/maplanding` URL),
+  `build_oauth_url()` parameter set, `deregister_device()`.
+- `Apollon77/alexa-cookie` v2+ — registers "as the Amazon mobile Apps", stores
+  `formerRegistrationData`, re-mints cookies on a 5–13-day cycle without
+  re-login; powers ioBroker.alexa2 and node alexa-remote in production since
+  ~2019; v4 added `macDms` for push.
+- `openhab/openhab-addons` amazonechocontrol — Java implementation of the same
+  flow; `/ap/exchangetoken` with `source_token_type=refresh_token`,
+  `requested_token_type=auth_cookies`.
+
+**Resolutions:**
+
+1. **Enrollment flow — RESOLVED: paste-URL, no proxy.** Audible ships this in
+   production; the code never transits our process and no reachable callback
+   exists. Adopted as the enrollment flow (details retained below for
+   reference).
+2. **Bootstrap matrix — DEMOTED to the fork's normal test matrix.** MFA
+   variants, captcha, regional domains, etc. are exercised during development
+   and beta, not as pre-work; Amazon's own page handles all challenge types in
+   the paste-URL flow, which is precisely why the scraping matrix shrinks.
+3. **Cookie reconstruction — ASSUMED YES (strong precedent).** alexa-cookie
+   and openHAB have re-minted session cookies from stored registration data
+   for years across the full API + push surface. Checkpoint: first restart of
+   the fork exercises it end to end.
+4. **Token longevity — ASSUMED LONG-LIVED (field precedent).** Across the
+   ioBroker/openHAB/Audible ecosystems, registrations survive until a
+   password change or account security event; Amazon login-page changes break
+   *new* logins (scraping/proxy paths), not existing registrations — e.g.
+   ioBroker.alexa2 #1374 broke proxy login while existing tokens kept
+   working. Design consequence: build the reauth path as the recovery story,
+   add passive telemetry (log refresh ages), and drop the measurement spike.
+   The "durability by analogy" caveat in the tradeoff section stays true —
+   this is an assumption, now a precedented one.
+5. **Flow integrity — RESOLVED BY DESIGN: no `state` reliance.** Audible's
+   production `build_oauth_url()` contains **no `state` parameter at all**;
+   the flow binds via PKCE `code_challenge` only, and no precedent project
+   relies on maplanding round-tripping extra params — so the design assumes
+   it does not. Binding controls, all framework-native or already in the
+   design: the PKCE `code_verifier` lives only in the in-progress config
+   flow's memory (a pasted code from any other flow fails the exchange);
+   flows expire with the config-flow session and the ~5-minute code lifetime;
+   `async_set_unique_id` + `_abort_if_unique_id_mismatch()` rejects an
+   exchange that resolves to a different Amazon account (blocks account
+   substitution / login-CSRF). The paste-URL flow has no listening callback
+   to attack — the residual risk is a user pasting an attacker-supplied URL,
+   which the unique-id check catches.
+
+Original spike list retained below for the record:
 
 1. **Direct-browser flow vs. MITM proxy.** Can enrollment avoid routing
    credentials through our process at all, eliminating *exposure* and not just
