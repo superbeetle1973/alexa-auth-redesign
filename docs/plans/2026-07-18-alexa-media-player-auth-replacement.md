@@ -2,8 +2,38 @@
 
 **Date:** 2026-07-18
 **Author:** Claude (analysis of `alandtse/alexa_media_player` + `keatontaylor/alexapy`)
-**Status:** Reviewed (Codex adversarial + contradiction-resolution passes complete); delivery decided — fork-first, new domain
+**Status:** PROVEN end-to-end against real Amazon (2026-07-18); reviewed (Codex adversarial + contradiction-resolution passes); delivery decided — fork-first, new domain
 **Repo:** https://github.com/superbeetle1973/alexa-auth-redesign (public)
+**Implementation:** https://github.com/superbeetle1973/alexapy-secure (`secureauth` module, PR #2)
+
+## Proof of concept — VERIFIED 2026-07-18
+
+Ran the `alexapy_secure.prove` harness against a real Amazon account
+(interactive login by the operator). All steps green:
+
+- **enroll:** paste-URL login (MFA challenge included) → maplanding redirect →
+  authorization code → `/auth/register` exchange → durable `refresh_token` +
+  `mac_dms` stored at `0600`. Password/OTP only ever entered on amazon.com.
+- **refresh:** 375-char access token minted from the refresh token alone.
+- **cookies:** session cookies (`at-main`, `sess-at-main`, `session-id`,
+  `ubid-main`, `x-main`) reconstructed from the refresh token — **no persisted
+  cookies** — validating the cookie-reconstruction assumption (OQ3).
+- **probe:** HTTP 200 on `/api/users/me`, `/api/devices-v2/device`,
+  `/api/bluetooth`, `/api/dnd/device-status-list` using only the reconstructed
+  cookies — the re-minted session actually works.
+
+Empirical confirmations from the live maplanding redirect:
+- **No `state` parameter** in Amazon's signed response (`openid.signed` list) —
+  confirms the PKCE-only binding decision (OQ5).
+- **MFA round-tripped** (`openid.pape.auth_policies=…multi-factor`) through the
+  proxy-free paste-URL flow (OQ1/OQ2).
+- **Account identifier present pre-exchange** (`claimed_id`/`identity` =
+  `amzn1.account.…`, Amazon-signed) — the config entry `unique_id` can be bound
+  at the paste step, stronger than the "only after exchange" fallback the
+  design assumed.
+
+The two load-bearing unknowns (paste-URL viability, cookie reconstruction) are
+now measured facts, not precedent-based assumptions.
 
 ## Scope
 
